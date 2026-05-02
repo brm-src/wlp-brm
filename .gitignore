@@ -1,0 +1,10 @@
+wallpapers/
+fetched/
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.bak
+*.swp
+*~
+*.log
