@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# next-wallpaper.sh
+# next-wallpaper.sh v4
 # Descarga un wallpaper aleatorio desde varios repositorios públicos
 # de GitHub y lo aplica con animación.
 #
@@ -10,7 +10,9 @@
 #   3. omarchy-theme-bg-set (fallback sin animación, sólo Omarchy)
 #
 # Pensado para Omarchy / Arch Linux con Hyprland.
-# Uso: bind a una tecla en Hyprland (ej: SUPER + B).
+# Uso:
+#   next-wallpaper.sh                         Descarga y aplica uno nuevo
+#   next-wallpaper.sh --load-last-or-fetch    Aplica el último válido o descarga si no hay
 #
 
 set -euo pipefail
@@ -30,16 +32,11 @@ SWAYBG_GUARD_SECONDS=3
 # Fuentes disponibles
 SOURCES=("dharmx" "denvercoder")
 
-# Categorías de dharmx/walls (selección curada: minimalista, naturaleza,
-# esquemas de color/rice y retro/synthwave)
+# Categorías de dharmx/walls
 DHARMX_CATEGORIES=(
-    # Minimalistas y limpias
     "minimal" "monochrome" "paper" "geometry" "calm" "tile"
-    # Naturaleza
     "aerial" "mountain" "nature" "fauna" "flowers" "fogsmoke"
-    # Esquemas de color / rice
     "gruvbox" "nord" "solarized" "radium"
-    # Retro / synthwave
     "outrun" "retro" "pixel" "chillop"
 )
 
@@ -81,7 +78,7 @@ notify_ok() {
 
 check_deps() {
     local missing=()
-    for dep in curl jq; do
+    for dep in curl jq file; do
         command -v "$dep" >/dev/null || missing+=("$dep")
     done
     if [ -z "$ENGINE_CMD" ] && ! command -v omarchy-theme-bg-set >/dev/null; then
@@ -91,6 +88,40 @@ check_deps() {
         notify_error "Faltan dependencias: ${missing[*]}"
         exit 1
     fi
+}
+
+# Valida que un archivo descargado sea realmente una imagen (no JSON de error,
+# no HTML, no README de markdown, etc.) usando MIME type.
+is_valid_image() {
+    local f="$1"
+    [ -s "$f" ] || return 1
+    local mime
+    mime=$(file -bL --mime-type "$f" 2>/dev/null || echo "")
+    case "$mime" in
+        image/jpeg|image/png|image/webp|image/gif|image/bmp|image/avif)
+            return 0
+            ;;
+        *)
+            log "  → descarga inválida (mime: $mime), descartando"
+            rm -f "$f"
+            return 1
+            ;;
+    esac
+}
+
+# Devuelve la ruta del wallpaper válido más reciente, o vacío si no hay.
+find_latest_valid() {
+    [ -d "$WALLPAPER_DIR" ] || return 1
+    local f
+    while IFS= read -r -d '' f; do
+        if is_valid_image "$f" 2>/dev/null; then
+            echo "$f"
+            return 0
+        fi
+    done < <(find "$WALLPAPER_DIR" -type f -printf '%T@ %p\0' 2>/dev/null \
+              | sort -z -rn \
+              | sed -z 's/^[0-9.]* //')
+    return 1
 }
 
 # Limpieza segura de archivos viejos (maneja nombres con comillas/espacios)
@@ -124,10 +155,8 @@ apply_wallpaper() {
     local image="$1"
 
     if [ -n "$ENGINE_CMD" ]; then
-        # Matar swaybg siempre antes de aplicar (lo lanza Omarchy y nos tapa)
         pkill -x swaybg 2>/dev/null || true
 
-        # Asegurar que el daemon esté corriendo
         if ! "$ENGINE_CMD" query &>/dev/null; then
             log "Iniciando $ENGINE_DAEMON"
             "$ENGINE_DAEMON" &
@@ -139,7 +168,6 @@ apply_wallpaper() {
             --transition-duration "$TRANSITION_DURATION" \
             --transition-fps "$TRANSITION_FPS" 2>/dev/null; then
             log "Wallpaper aplicado con $ENGINE_NAME (animado)"
-            # Vigilar swaybg unos segundos más, por si algo en Omarchy lo relanza
             guard_against_swaybg "$SWAYBG_GUARD_SECONDS"
             return 0
         else
@@ -147,7 +175,6 @@ apply_wallpaper() {
         fi
     fi
 
-    # Fallback
     if command -v omarchy-theme-bg-set >/dev/null; then
         omarchy-theme-bg-set "$image"
         log "Wallpaper aplicado con omarchy-theme-bg-set (sin animación)"
@@ -169,17 +196,19 @@ fetch_dharmx() {
         "https://api.github.com/repos/dharmx/walls/contents/${category}") \
         || { log "dharmx: fallo de red"; return 1; }
 
-    total=$(echo "$json" | jq 'length')
-    [ "$total" -eq 0 ] && { log "dharmx: categoría vacía"; return 1; }
+    # Filtrar solo archivos con extensión de imagen (excluye READMEs, dirs, etc.)
+    total=$(echo "$json" | jq '[.[] | select(.type=="file") | select(.name | test("\\.(jpg|jpeg|png|webp)$"; "i"))] | length')
+    [ "$total" -eq 0 ] && { log "dharmx: sin imágenes en categoría"; return 1; }
 
     index=$((RANDOM % total))
-    url=$(echo "$json" | jq -r ".[$index].download_url // empty")
-    name=$(echo "$json" | jq -r ".[$index].name // empty")
-    [ -z "$url" ] && { log "dharmx: URL vacía"; return 1; }
+    url=$(echo "$json" | jq -r "[.[] | select(.type==\"file\") | select(.name | test(\"\\\\.(jpg|jpeg|png|webp)\$\"; \"i\"))][$index].download_url")
+    name=$(echo "$json" | jq -r "[.[] | select(.type==\"file\") | select(.name | test(\"\\\\.(jpg|jpeg|png|webp)\$\"; \"i\"))][$index].name")
+
+    [ -z "$url" ] || [ "$url" = "null" ] && { log "dharmx: URL vacía"; return 1; }
 
     dest="$WALLPAPER_DIR/dharmx-${name}"
     curl -fsSL --max-time 60 -o "$dest" "$url" || { log "dharmx: fallo descarga"; return 1; }
-    [ -s "$dest" ] || { rm -f "$dest"; return 1; }
+    is_valid_image "$dest" || return 1
     echo "$dest"
 }
 
@@ -191,7 +220,7 @@ fetch_denvercoder() {
     dest="$WALLPAPER_DIR/denvercoder-${rand}.jpg"
     curl -fsSL --max-time 60 -L -o "$dest" "$url" \
         || { log "denvercoder: fallo descarga"; return 1; }
-    [ -s "$dest" ] || { rm -f "$dest"; return 1; }
+    is_valid_image "$dest" || return 1
     echo "$dest"
 }
 
@@ -225,7 +254,7 @@ fetch_makccr() {
 
     dest="$WALLPAPER_DIR/makccr-${name}"
     curl -fsSL --max-time 60 -o "$dest" "$url" || return 1
-    [ -s "$dest" ] || { rm -f "$dest"; return 1; }
+    is_valid_image "$dest" || return 1
     echo "$dest"
 }
 
@@ -248,16 +277,13 @@ fetch_mylinuxforwork() {
 
     dest="$WALLPAPER_DIR/mylfw-${name}"
     curl -fsSL --max-time 60 -o "$dest" "$url" || return 1
-    [ -s "$dest" ] || { rm -f "$dest"; return 1; }
+    is_valid_image "$dest" || return 1
     echo "$dest"
 }
 
-# ---- Main ----
-main() {
-    detect_engine
-    check_deps
-    mkdir -p "$WALLPAPER_DIR"
+# ---- Flujos ----
 
+fetch_new() {
     local shuffled=()
     mapfile -t shuffled < <(printf '%s\n' "${SOURCES[@]}" | shuf)
 
@@ -269,10 +295,11 @@ main() {
             makccr)         dest=$(fetch_makccr)         || dest="" ;;
             mylinuxforwork) dest=$(fetch_mylinuxforwork) || dest="" ;;
         esac
-        [ -n "$dest" ] && [ -s "$dest" ] && break
+        [ -n "$dest" ] && is_valid_image "$dest" 2>/dev/null && break
+        dest=""
     done
 
-    if [ -z "$dest" ] || [ ! -s "$dest" ]; then
+    if [ -z "$dest" ]; then
         notify_error "No se pudo descargar de ninguna fuente"
         exit 1
     fi
@@ -284,6 +311,43 @@ main() {
 
     notify_ok "Nuevo wallpaper aplicado"
     cleanup_old
+}
+
+# Modo autostart: aplica el último wallpaper válido sin descargar nada.
+# Si no hay ninguno válido, cae al flujo normal (descarga uno).
+load_last_or_fetch() {
+    local latest
+    latest=$(find_latest_valid || true)
+    if [ -n "$latest" ]; then
+        log "Aplicando último wallpaper válido: $(basename "$latest")"
+        apply_wallpaper "$latest" || { log "Falló aplicar, intentando descarga"; fetch_new; return; }
+        return
+    fi
+    log "No hay wallpapers locales, descargando uno"
+    fetch_new
+}
+
+# ---- Main ----
+main() {
+    detect_engine
+    check_deps
+    mkdir -p "$WALLPAPER_DIR"
+
+    case "${1:-}" in
+        --load-last-or-fetch)
+            load_last_or_fetch
+            ;;
+        ""|--fetch)
+            fetch_new
+            ;;
+        -h|--help)
+            sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
+            ;;
+        *)
+            log "Opción desconocida: $1"
+            exit 1
+            ;;
+    esac
 }
 
 main "$@"
