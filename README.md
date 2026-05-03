@@ -73,3 +73,13 @@ wlp-brm/
 ## Licencia
 
 MIT. Las imágenes pertenecen a sus respectivos repositorios y autores originales.
+
+## Autostart al iniciar sesión (opcional)
+
+Por defecto el script solo se ejecuta cuando aprietas `Super + B`. Si quieres que al iniciar Hyprland cargue automáticamente el último wallpaper descargado (y solo descargue uno nuevo si la carpeta está vacía), agrega esta línea a `~/.config/hypr/autostart.conf`:
+
+```
+exec-once = sh -c 'sleep 2 && f=$(ls -t ~/.local/share/wallpapers/fetched/ 2>/dev/null | head -1); [ -n "$f" ] && swww img "$HOME/.local/share/wallpapers/fetched/$f" --transition-type none || ~/.local/bin/next-wallpaper.sh'
+```
+
+Esto evita el fondo negro al iniciar sesión, sin gastar datos descargando un wallpaper nuevo cada vez.
