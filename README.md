@@ -1,5 +1,9 @@
 # wlp-brm
 
+<p align="center">
+  <a href="https://www.ko-fi.com/brmcl"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" /></a>
+</p>
+
 Script para Hyprland que cambia el wallpaper aleatoriamente desde varios repositorios públicos de GitHub. Pensado para Omarchy / Arch Linux con `swww`.
 
 ## Qué hace
